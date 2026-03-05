@@ -76,7 +76,6 @@ jobs:
             "mingw-w64-${TOOLCHAIN}-opus"
             "mingw-w64-${TOOLCHAIN}-toolchain"
             "mingw-w64-${TOOLCHAIN}-MinHook"
-            "mingw-w64-${TOOLCHAIN}-nsis"
             "mingw-w64-${TOOLCHAIN}-nodejs"
           )
 
@@ -136,11 +135,6 @@ jobs:
           # Clean up
           Remove-Item -Path doxygen-setup.exe
 
-      - name: Setup dotnet  # needed for wix
-        uses: actions/setup-dotnet@baa11fbfe1d6520db94683bd5c7a3818018e4309  # v5.1.0
-        with:
-          dotnet-version: '10.x'
-
       - name: Build Windows
         shell: msys2 {0}
         env:
@@ -170,24 +164,10 @@ jobs:
           cd build
 
           # package
-          cpack -G NSIS
-          cpack -G WIX
           cpack -G ZIP
 
           # move
-          mv ./cpack_artifacts/Sunshine.exe ../artifacts/Sunshine-Windows-AMD64-installer.exe
-          mv ./cpack_artifacts/Sunshine.msi ../artifacts/Sunshine-Windows-AMD64-installer.msi
           mv ./cpack_artifacts/Sunshine.zip ../artifacts/Sunshine-Windows-AMD64-portable.zip
-
-      - name: Debug nsis
-        if: always()
-        shell: msys2 {0}
-        run: cat ./build/cpack_artifacts/_CPack_Packages/win64/NSIS/NSISOutput.log || true
-
-      - name: Debug wix
-        if: always()
-        shell: msys2 {0}
-        run: cat ./build/cpack_artifacts/_CPack_Packages/win64/WIX/wix.log || true
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0

@@ -90,6 +90,17 @@ using namespace std::literals;
 
 namespace stream {
 
+  static std::string normalize_peer_address(const boost::asio::ip::address &address) {
+    if (address.is_v6()) {
+      auto v6 = address.to_v6();
+      if (v6.is_v4_mapped()) {
+        return v6.to_v4().to_string();
+      }
+    }
+
+    return address.to_string();
+  }
+
   enum class socket_e : int {
     video,  ///< Video
     audio  ///< Audio
@@ -1222,6 +1233,8 @@ namespace stream {
 
     bool mic_device_initialized = false;
     auto retry_delay = 300ms;
+    bool logged_first_mic_packet = false;
+    bool logged_first_mic_forward = false;
 
     auto process_audio_data = [&](const std::uint8_t *audio_data, size_t data_size, std::uint16_t sequence_number, const std::string &peer_addr) {
       // Only accept microphone packets from clients that negotiated microphone streaming.
@@ -1232,28 +1245,51 @@ namespace stream {
         std::lock_guard<std::mutex> lg(ctx.mic_clients_mutex);
         auto it = ctx.mic_clients.find(peer_addr);
         if (it == ctx.mic_clients.end()) {
-          return;
+          // If we can't match by source address (common with dual-stack or NAT),
+          // fall back to the only negotiated mic session (if there is just one).
+          if (ctx.mic_clients.size() == 1) {
+            it = ctx.mic_clients.begin();
+          } else {
+            return;
+          }
         }
 
         auto &client = it->second;
         if (client.encryption_enabled && client.cipher.has_value()) {
           use_plaintext = false;
 
-          crypto::aes_t current_iv(16);
-          *(std::uint32_t *) current_iv.data() = util::endian::big<std::uint32_t>(client.avRiKeyId + (sequence_number & 0xFFFF));
-          std::memset(current_iv.data() + 4, 0, 12);
+          auto decrypt_with_seq = [&](std::uint16_t seq_for_iv) -> bool {
+            crypto::aes_t current_iv(16);
+            *(std::uint32_t *) current_iv.data() = util::endian::big<std::uint32_t>(client.avRiKeyId + (seq_for_iv & 0xFFFF));
+            std::memset(current_iv.data() + 4, 0, 12);
 
-          std::string_view cipher_view((const char *) audio_data, data_size);
-          if (client.cipher->decrypt(cipher_view, plaintext, &current_iv) != 0) {
-            return;
+            plaintext.clear();
+            std::string_view cipher_view((const char *) audio_data, data_size);
+            return client.cipher->decrypt(cipher_view, plaintext, &current_iv) == 0;
+          };
+
+          if (!decrypt_with_seq(sequence_number)) {
+            // Some clients historically used an off-by-one sequence when building IVs.
+            // Retry with (seq - 1) to be tolerant.
+            if (!decrypt_with_seq(static_cast<std::uint16_t>(sequence_number - 1))) {
+              return;
+            }
           }
         }
       }
 
       if (use_plaintext) {
-        audio::write_mic_data(audio_data, data_size, sequence_number);
+        auto rc = audio::write_mic_data(audio_data, data_size, sequence_number);
+        if (rc > 0 && !logged_first_mic_forward) {
+          BOOST_LOG(info) << "Received and forwarded first client microphone packet"sv;
+          logged_first_mic_forward = true;
+        }
       } else {
-        audio::write_mic_data(plaintext.data(), plaintext.size(), sequence_number);
+        auto rc = audio::write_mic_data(plaintext.data(), plaintext.size(), sequence_number);
+        if (rc > 0 && !logged_first_mic_forward) {
+          BOOST_LOG(info) << "Received and forwarded first client microphone packet"sv;
+          logged_first_mic_forward = true;
+        }
       }
     };
 
@@ -1303,7 +1339,12 @@ namespace stream {
         continue;
       }
 
-      std::string client_ip = peer.address().to_string();
+      if (!logged_first_mic_packet) {
+        BOOST_LOG(info) << "Received first client microphone UDP packet from "sv << normalize_peer_address(peer.address()) << " ("sv << received_bytes << " bytes)"sv;
+        logged_first_mic_packet = true;
+      }
+
+      std::string client_ip = normalize_peer_address(peer.address());
 
       // Attempt 16-bit packet type variant first
       if (received_bytes >= sizeof(rtp_packet_ext_t)) {
@@ -2085,6 +2126,31 @@ namespace stream {
       return;
     }
 
+    // If mic redirection is enabled, update the mic client mapping to reflect the
+    // actual peer address that sent the audio ping. This improves compatibility
+    // with dual-stack sockets and NAT where the RTSP TCP peer address may not
+    // match the UDP source address used for microphone packets.
+#ifdef _WIN32
+    if (session->audio.enable_mic && config::audio.stream_mic && session->broadcast_ref) {
+      auto new_key = normalize_peer_address(session->audio.peer.address());
+      boost::system::error_code ec;
+      auto expected_addr = boost::asio::ip::make_address(session->control.expected_peer_address, ec);
+      if (!ec) {
+        auto old_key = normalize_peer_address(expected_addr);
+        if (old_key != new_key) {
+          std::lock_guard<std::mutex> lg(session->broadcast_ref->mic_clients_mutex);
+          auto it = session->broadcast_ref->mic_clients.find(old_key);
+          if (it != session->broadcast_ref->mic_clients.end()) {
+            auto client = std::move(it->second);
+            session->broadcast_ref->mic_clients.erase(it);
+            session->broadcast_ref->mic_clients.erase(new_key);
+            session->broadcast_ref->mic_clients.emplace(new_key, std::move(client));
+          }
+        }
+      }
+    }
+#endif
+
     // Enable local prioritization and QoS tagging on audio traffic if requested by the client
     auto address = session->audio.peer.address();
     session->audio.qos = platf::enable_socket_qos(ref->audio_sock.native_handle(), address, session->audio.peer.port(), platf::qos_data_type_e::audio, session->config.audioQosType != 0);
@@ -2137,10 +2203,19 @@ namespace stream {
       input::reset(session.input);
 
       if (session.audio.enable_mic && session.broadcast_ref) {
-        auto client_ip = session.audio.peer.address().to_string();
+        auto client_ip = normalize_peer_address(session.audio.peer.address());
+        boost::system::error_code ec;
+        auto expected_addr = boost::asio::ip::make_address(session.control.expected_peer_address, ec);
+        std::optional<std::string> expected_ip;
+        if (!ec) {
+          expected_ip = normalize_peer_address(expected_addr);
+        }
         {
           std::lock_guard<std::mutex> lg(session.broadcast_ref->mic_clients_mutex);
           session.broadcast_ref->mic_clients.erase(client_ip);
+          if (expected_ip && *expected_ip != client_ip) {
+            session.broadcast_ref->mic_clients.erase(*expected_ip);
+          }
         }
 
         int remaining_count = session.broadcast_ref->mic_sessions_count.fetch_sub(1, std::memory_order_relaxed) - 1;
@@ -2211,7 +2286,7 @@ namespace stream {
           mic_client.cipher.emplace(session.audio.cipher.key, session.audio.cipher.padding);
         }
 
-        auto client_ip = session.audio.peer.address().to_string();
+        auto client_ip = normalize_peer_address(session.audio.peer.address());
         {
           std::lock_guard<std::mutex> lg(session.broadcast_ref->mic_clients_mutex);
           session.broadcast_ref->mic_clients.erase(client_ip);
