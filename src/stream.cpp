@@ -94,7 +94,12 @@ namespace stream {
     if (address.is_v6()) {
       auto v6 = address.to_v6();
       if (v6.is_v4_mapped()) {
-        return v6.to_v4().to_string();
+        // Boost.Asio versions prior to 1.82 don't provide address_v6::to_v4().
+        // Extract the last 4 bytes ourselves.
+        auto bytes = v6.to_bytes();
+        boost::asio::ip::address_v4::bytes_type v4_bytes {};
+        std::copy_n(bytes.data() + 12, v4_bytes.size(), v4_bytes.data());
+        return boost::asio::ip::address_v4(v4_bytes).to_string();
       }
     }
 
