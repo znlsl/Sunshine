@@ -1,0 +1,197 @@
+---
+name: Build-Windows
+permissions: {}
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_version:
+        description: "Override BUILD_VERSION (e.g. v2026.0305.120000). Leave blank to auto-generate."
+        required: false
+        type: string
+  push:
+    branches:
+      - master
+      - windows-build
+
+jobs:
+  build_windows:
+    name: Windows-AMD64
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: msys2 {0}
+    permissions:
+      contents: read
+    env:
+      # MSYSTEM is a built-in environment variable of MSYS2.
+      # Do not use this environment variable name.
+      MATRIX_MSYSTEM: ucrt64
+      TOOLCHAIN: ucrt-x86_64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          submodules: recursive
+
+      - name: Setup Dependencies Windows
+        uses: msys2/setup-msys2@4f806de0a5a7294ffabaff804b38a9b435a73bda  # v2.30.0
+        with:
+          msystem: ${{ env.MATRIX_MSYSTEM }}
+          update: true
+          install: >-
+            wget
+
+      - name: Set Build Vars
+        id: build-vars
+        env:
+          INPUT_BUILD_VERSION: ${{ github.event.inputs.build_version }}
+        run: |
+          if [[ -n "${INPUT_BUILD_VERSION}" ]]; then
+            build_version="${INPUT_BUILD_VERSION}"
+          else
+            build_version="v$(date -u +'%Y.%m%d.%H%M%S')"
+          fi
+          echo "build_version=${build_version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Update Windows dependencies
+        shell: msys2 {0}
+        run: |
+          # variables
+          declare -A pinned_deps
+
+          # dependencies
+          dependencies=(
+            "git"
+            "mingw-w64-${TOOLCHAIN}-boost"
+            "mingw-w64-${TOOLCHAIN}-cmake"
+            "mingw-w64-${TOOLCHAIN}-cppwinrt"
+            "mingw-w64-${TOOLCHAIN}-curl-winssl"
+            "mingw-w64-${TOOLCHAIN}-gcc"
+            "mingw-w64-${TOOLCHAIN}-graphviz"
+            "mingw-w64-${TOOLCHAIN}-miniupnpc"
+            "mingw-w64-${TOOLCHAIN}-nlohmann-json"
+            "mingw-w64-${TOOLCHAIN}-onevpl"
+            "mingw-w64-${TOOLCHAIN}-openssl"
+            "mingw-w64-${TOOLCHAIN}-opus"
+            "mingw-w64-${TOOLCHAIN}-toolchain"
+            "mingw-w64-${TOOLCHAIN}-MinHook"
+            "mingw-w64-${TOOLCHAIN}-nsis"
+            "mingw-w64-${TOOLCHAIN}-nodejs"
+          )
+
+          # do not modify below this line
+
+          ignore_packages=()
+          tarballs=""
+          for pkg in "${!pinned_deps[@]}"; do
+            ignore_packages+=("${pkg}")
+            version="${pinned_deps[$pkg]}"
+            tarball="${pkg}-${version}-any.pkg.tar.zst"
+
+            # download working version
+            wget "https://repo.msys2.org/mingw/${MATRIX_MSYSTEM}/${tarball}"
+
+            tarballs="${tarballs} ${tarball}"
+          done
+
+          # Create the ignore string for pacman
+          ignore_list=$(IFS=,; echo "${ignore_packages[*]}")
+
+          # install pinned dependencies
+          if [ -n "${tarballs}" ]; then
+            pacman -U --noconfirm "${tarballs}"
+          fi
+
+          # Only add --ignore if we have packages to ignore
+          if [ -n "${ignore_list}" ]; then
+            pacman -Syu --noconfirm --ignore="${ignore_list}" "${dependencies[@]}"
+          else
+            pacman -Syu --noconfirm "${dependencies[@]}"
+          fi
+
+      - name: Install Doxygen
+        # GCC compiled doxygen has issues when running graphviz
+        env:
+          DOXYGEN_VERSION: "1.11.0"
+        shell: pwsh
+        run: |
+          # Set version variables
+          $doxy_ver = $env:DOXYGEN_VERSION
+          $_doxy_ver = $doxy_ver.Replace(".", "_")
+
+          # Download the Doxygen installer
+          Invoke-WebRequest -Uri `
+            "https://github.com/doxygen/doxygen/releases/download/Release_${_doxy_ver}/doxygen-${doxy_ver}-setup.exe" `
+            -OutFile "doxygen-setup.exe"
+
+          # Run the installer
+          Start-Process `
+            -FilePath .\doxygen-setup.exe `
+            -ArgumentList `
+              '/VERYSILENT' `
+          -Wait `
+          -NoNewWindow
+
+          # Clean up
+          Remove-Item -Path doxygen-setup.exe
+
+      - name: Setup dotnet  # needed for wix
+        uses: actions/setup-dotnet@baa11fbfe1d6520db94683bd5c7a3818018e4309  # v5.1.0
+        with:
+          dotnet-version: '10.x'
+
+      - name: Build Windows
+        shell: msys2 {0}
+        env:
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+          BUILD_VERSION: ${{ steps.build-vars.outputs.build_version }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          mkdir -p build
+          cmake \
+            -B build \
+            -G Ninja \
+            -S . \
+            -DBUILD_WERROR=ON \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DSUNSHINE_ASSETS_DIR=assets \
+            -DSUNSHINE_PUBLISHER_NAME="${GITHUB_REPOSITORY_OWNER}" \
+            -DSUNSHINE_PUBLISHER_WEBSITE="https://app.lizardbyte.dev" \
+            -DSUNSHINE_PUBLISHER_ISSUE_URL="https://app.lizardbyte.dev/support"
+          echo "::add-matcher::.github/matchers/gcc.json"
+          ninja -C build
+          echo "::remove-matcher owner=gcc::"
+
+      - name: Package Windows
+        shell: msys2 {0}
+        run: |
+          mkdir -p artifacts
+          cd build
+
+          # package
+          cpack -G NSIS
+          cpack -G WIX
+          cpack -G ZIP
+
+          # move
+          mv ./cpack_artifacts/Sunshine.exe ../artifacts/Sunshine-Windows-AMD64-installer.exe
+          mv ./cpack_artifacts/Sunshine.msi ../artifacts/Sunshine-Windows-AMD64-installer.msi
+          mv ./cpack_artifacts/Sunshine.zip ../artifacts/Sunshine-Windows-AMD64-portable.zip
+
+      - name: Debug nsis
+        if: always()
+        shell: msys2 {0}
+        run: cat ./build/cpack_artifacts/_CPack_Packages/win64/NSIS/NSISOutput.log || true
+
+      - name: Debug wix
+        if: always()
+        shell: msys2 {0}
+        run: cat ./build/cpack_artifacts/_CPack_Packages/win64/WIX/wix.log || true
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        with:
+          name: build-Windows-AMD64
+          path: artifacts/
+          if-no-files-found: error
