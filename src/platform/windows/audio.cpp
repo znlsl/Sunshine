@@ -6,6 +6,7 @@
 
 // standard includes
 #include <format>
+#include <mutex>
 
 // platform includes
 #include <Audioclient.h>
@@ -19,6 +20,7 @@
 #include "src/config.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
+#include "mic_write.h"
 #include "utf_utils.h"
 
 // Must be the last included file
@@ -688,6 +690,9 @@ namespace platf::audio {
     HANDLE mmcss_task_handle = nullptr;
   };
 
+  static std::mutex mic_redirect_mutex;
+  static std::unique_ptr<mic_write_wasapi_t> mic_redirect_device;
+
   class audio_control_t: public ::platf::audio_control_t {
   public:
     std::optional<sink_t> sink_info() override {
@@ -1145,6 +1150,44 @@ namespace platf::audio {
       }
 
       return 0;
+    }
+
+    int init_mic_redirect_device() override {
+      std::lock_guard<std::mutex> lock(mic_redirect_mutex);
+
+      if (!mic_redirect_device) {
+        mic_redirect_device = std::make_unique<mic_write_wasapi_t>();
+      }
+
+      if (mic_redirect_device->init() != 0) {
+        BOOST_LOG(warning) << "Failed to initialize client mic redirection device"sv;
+        mic_redirect_device->restore_audio_devices();
+        mic_redirect_device.reset();
+        return -1;
+      }
+
+      BOOST_LOG(info) << "Successfully initialized client mic redirection device"sv;
+      return 0;
+    }
+
+    void release_mic_redirect_device() override {
+      std::lock_guard<std::mutex> lock(mic_redirect_mutex);
+
+      if (mic_redirect_device) {
+        mic_redirect_device->restore_audio_devices();
+        mic_redirect_device.reset();
+      }
+    }
+
+    int write_mic_data(const char *data, size_t len, std::uint16_t seq) override {
+      std::lock_guard<std::mutex> lock(mic_redirect_mutex);
+
+      if (!mic_redirect_device || mic_redirect_device->is_cleaning_up.load()) {
+        BOOST_LOG(warning) << "Mic redirect device not available or cleaning up"sv;
+        return -1;
+      }
+
+      return mic_redirect_device->write_data(data, len, seq);
     }
 
     ~audio_control_t() override {

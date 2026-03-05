@@ -344,6 +344,8 @@
     "search_options": "搜索配置选项...",
     "stream_audio": "流音频",
     "stream_audio_desc": "是否播放音频。禁用此选项可有助于流媒体无头显示作为第二个显示器。",
+    "stream_mic": "串流麦克风",
+    "stream_mic_desc": "是否接收客户端麦克风并重定向到主机端的虚拟麦克风。（仅 Windows）",
     "sunshine_name": "Sunshine 主机名称",
     "sunshine_name_desc": "在 Moonlight 中显示的名称。如果未指定，则使用 PC 的主机名",
     "sw_preset": "软件编码预设",

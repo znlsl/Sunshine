@@ -264,6 +264,34 @@ namespace audio {
     return ctx.control->is_sink_available(sink);
   }
 
+  int init_mic_redirect_device() {
+    auto ref = get_audio_ctx_ref();
+    if (!ref || !ref->control) {
+      BOOST_LOG(error) << "Audio context not available for microphone device initialization"sv;
+      return -1;
+    }
+    return ref->control->init_mic_redirect_device();
+  }
+
+  void release_mic_redirect_device() {
+    auto ref = get_audio_ctx_ref();
+    if (!ref || !ref->control) {
+      BOOST_LOG(warning) << "Audio context not available for microphone device release"sv;
+      return;
+    }
+    ref->control->release_mic_redirect_device();
+  }
+
+  int write_mic_data(const std::uint8_t *data, size_t size, std::uint16_t seq) {
+    auto ref = get_audio_ctx_ref();
+    if (!ref || !ref->control) {
+      BOOST_LOG(warning) << "Audio context not available for microphone data writing"sv;
+      return -1;
+    }
+
+    return ref->control->write_mic_data(reinterpret_cast<const char *>(data), size, seq);
+  }
+
   int map_stream(int channels, bool quality) {
     int shift = quality ? 1 : 0;
     switch (channels) {

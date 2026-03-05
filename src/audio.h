@@ -101,4 +101,8 @@ namespace audio {
    * @examples_end
    */
   bool is_audio_ctx_sink_available(const audio_ctx_t &ctx);
+
+  int init_mic_redirect_device();
+  void release_mic_redirect_device();
+  int write_mic_data(const std::uint8_t *data, size_t size, std::uint16_t seq);
 }  // namespace audio

@@ -33,6 +33,7 @@ namespace rtsp_stream {
     int surround_info;
     std::string surround_params;
     bool continuous_audio;
+    bool enable_mic {false};
     bool enable_hdr;
     bool enable_sops;
 

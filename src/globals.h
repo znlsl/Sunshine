@@ -9,6 +9,11 @@
 #include "thread_pool.h"
 
 /**
+ * @brief The encryption flag for microphone data.
+ */
+#define SS_ENC_MIC 0x08
+
+/**
  * @brief A thread pool for processing tasks.
  */
 extern thread_pool_util::ThreadPool task_pool;

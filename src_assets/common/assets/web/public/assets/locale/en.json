@@ -344,6 +344,8 @@
     "search_options": "Search configuration options...",
     "stream_audio": "Stream Audio",
     "stream_audio_desc": "Whether to stream audio or not. Disabling this can be useful for streaming headless displays as second monitors.",
+    "stream_mic": "Stream Microphone",
+    "stream_mic_desc": "Whether to accept client microphone audio and redirect it to a virtual microphone on the host. (Windows only)",
     "sunshine_name": "Sunshine Name",
     "sunshine_name_desc": "The name displayed by Moonlight. If not specified, the PC's hostname is used",
     "sw_preset": "SW Presets",

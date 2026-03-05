@@ -846,6 +846,30 @@ editing the `conf` file in a text editor. Use the examples as reference.
         <td colspan="2">@code{}
             stream_audio = disabled
             @endcode</td>
+	</tr>
+</table>
+
+### stream_mic
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Whether to receive microphone audio from the client and redirect it to a virtual microphone on the host.
+            @note{This option is only supported on Windows.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            stream_mic = enabled
+            @endcode</td>
     </tr>
 </table>
 

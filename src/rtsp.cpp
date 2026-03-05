@@ -768,6 +768,12 @@ namespace rtsp_stream {
     uint32_t encryption_flags_supported = SS_ENC_CONTROL_V2 | SS_ENC_AUDIO;
     uint32_t encryption_flags_requested = SS_ENC_CONTROL_V2;
 
+#ifdef _WIN32
+    if (config::audio.stream_mic) {
+      encryption_flags_supported |= SS_ENC_MIC;
+    }
+#endif
+
     // Determine the encryption desired for this remote endpoint
     auto encryption_mode = net::encryption_mode_for_address(sock.remote_endpoint().address());
     if (encryption_mode != config::ENCRYPTION_MODE_NEVER) {
@@ -778,6 +784,11 @@ namespace rtsp_stream {
       // didn't explicitly opt in, but it otherwise has support.
       if (encryption_mode == config::ENCRYPTION_MODE_MANDATORY) {
         encryption_flags_requested |= SS_ENC_VIDEO | SS_ENC_AUDIO;
+#ifdef _WIN32
+        if (config::audio.stream_mic) {
+          encryption_flags_requested |= SS_ENC_MIC;
+        }
+#endif
       }
     }
 
@@ -802,6 +813,15 @@ namespace rtsp_stream {
       ss << "a=fmtp:97 surround-params="sv << session.surround_params << std::endl;
       ss << "a=fmtp:97 surround-params="sv << session.surround_params << std::endl;
     }
+
+    // Advertise microphone stream support (client -> host)
+#ifdef _WIN32
+    if (config::audio.stream_mic) {
+      ss << "m=audio " << net::map_port(stream::MIC_STREAM_PORT) << " RTP/AVP 96" << std::endl;
+      ss << "a=rtpmap:96 opus/48000/2" << std::endl;
+      ss << "a=fmtp:96 minptime=10;useinbandfec=1" << std::endl;
+    }
+#endif
 
     for (int x = 0; x < audio::MAX_STREAM_CONFIG; ++x) {
       auto &stream_config = audio::stream_configs[x];
@@ -858,6 +878,18 @@ namespace rtsp_stream {
       port = net::map_port(stream::VIDEO_STREAM_PORT);
     } else if (type == "control"sv) {
       port = net::map_port(stream::CONTROL_PORT);
+    } else if (type == "mic"sv) {
+#ifdef _WIN32
+      if (!config::audio.stream_mic) {
+        cmd_not_found(sock, session, std::move(req));
+        return;
+      }
+      session.enable_mic = true;
+      port = net::map_port(stream::MIC_STREAM_PORT);
+#else
+      cmd_not_found(sock, session, std::move(req));
+      return;
+#endif
     } else {
       cmd_not_found(sock, session, std::move(req));
 

@@ -575,6 +575,30 @@ namespace platf {
 
     virtual std::optional<sink_t> sink_info() = 0;
 
+    /**
+     * @brief Initialize virtual microphone redirection device (Windows only).
+     * @return 0 on success, -1 on failure.
+     */
+    virtual int init_mic_redirect_device() {
+      return -1;
+    }
+
+    /**
+     * @brief Release virtual microphone redirection device (Windows only).
+     */
+    virtual void release_mic_redirect_device() {}
+
+    /**
+     * @brief Write microphone data to virtual microphone device (Windows only).
+     * @param data OPUS encoded audio data.
+     * @param len Length of data in bytes.
+     * @param seq Packet sequence number (0 = unknown).
+     * @return Number of bytes written, or -1 on error.
+     */
+    virtual int write_mic_data(const char *data, size_t len, std::uint16_t seq) {
+      return -1;
+    }
+
     virtual ~audio_control_t() = default;
   };
 
