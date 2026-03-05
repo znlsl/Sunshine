@@ -4,6 +4,125 @@ install(TARGETS sunshine RUNTIME DESTINATION "." COMPONENT application)
 # Hardening: include zlib1.dll (loaded via LoadLibrary() in openssl's libcrypto.a)
 install(FILES "${ZLIB}" DESTINATION "." COMPONENT application)
 
+# Include libopus runtime DLL when linked dynamically (common with MSYS2/mingw-w64).
+# Without this, Sunshine may fail to start on systems that don't have MSYS2 installed.
+set(_sunshine_opus_dll "")
+if(DEFINED Opus_LIBRARY AND IS_ABSOLUTE "${Opus_LIBRARY}")
+    get_filename_component(_sunshine_opus_lib_dir "${Opus_LIBRARY}" DIRECTORY)
+    set(_sunshine_opus_dll_candidate "${_sunshine_opus_lib_dir}/../bin/libopus-0.dll")
+    if(EXISTS "${_sunshine_opus_dll_candidate}")
+        set(_sunshine_opus_dll "${_sunshine_opus_dll_candidate}")
+    endif()
+endif()
+
+if(NOT _sunshine_opus_dll)
+    find_file(_sunshine_opus_dll
+            NAMES libopus-0.dll libopus.dll opus-0.dll
+            PATH_SUFFIXES bin
+    )
+endif()
+
+if(_sunshine_opus_dll)
+    install(FILES "${_sunshine_opus_dll}" DESTINATION "." COMPONENT application)
+endif()
+
+# Include libssp runtime DLL (used by GCC stack-protector on mingw).
+set(_sunshine_libssp_dll "")
+if(DEFINED CMAKE_CXX_COMPILER AND IS_ABSOLUTE "${CMAKE_CXX_COMPILER}")
+    get_filename_component(_sunshine_toolchain_bin_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    set(_sunshine_libssp_dll_candidate "${_sunshine_toolchain_bin_dir}/libssp-0.dll")
+    if(EXISTS "${_sunshine_libssp_dll_candidate}")
+        set(_sunshine_libssp_dll "${_sunshine_libssp_dll_candidate}")
+    endif()
+endif()
+
+if(NOT _sunshine_libssp_dll)
+    find_file(_sunshine_libssp_dll NAMES libssp-0.dll PATH_SUFFIXES bin)
+endif()
+
+if(_sunshine_libssp_dll)
+    install(FILES "${_sunshine_libssp_dll}" DESTINATION "." COMPONENT application)
+endif()
+
+# Bundle runtime DLL dependencies (e.g. libssp-0.dll, libwinpthread-1.dll) for mingw builds.
+# This keeps the portable ZIP and installers runnable on machines without MSYS2 installed.
+set(_sunshine_bundle_deps_script "${CMAKE_BINARY_DIR}/bundle-runtime-deps.cmake")
+set(_sunshine_runtime_search_dirs "")
+if(DEFINED CMAKE_CXX_COMPILER AND IS_ABSOLUTE "${CMAKE_CXX_COMPILER}")
+    get_filename_component(_sunshine_toolchain_bin_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    cmake_path(CONVERT "${_sunshine_toolchain_bin_dir}" TO_CMAKE_PATH_LIST _sunshine_toolchain_bin_dir)
+    set(_sunshine_runtime_search_dirs "${_sunshine_toolchain_bin_dir}")
+endif()
+
+set(_sunshine_bundle_deps_script_content [==[
+set(_sunshine_runtime_search_dirs "@SUNSHINE_RUNTIME_SEARCH_DIRS@")
+
+set(_sunshine_runtime_targets
+  "$<TARGET_FILE:sunshine>|."
+  "$<TARGET_FILE:sunshinesvc>|tools"
+  "$<TARGET_FILE:audio-info>|tools"
+  "$<TARGET_FILE:dxgi-info>|tools"
+)
+
+foreach(_pair IN LISTS _sunshine_runtime_targets)
+  string(REPLACE "|" ";" _parts "${_pair}")
+  list(GET _parts 0 _exe)
+  list(GET _parts 1 _dest)
+
+  if(NOT EXISTS "${_exe}")
+    message(STATUS "bundle-runtime-deps: skip missing '${_exe}'")
+    continue()
+  endif()
+
+  if(_sunshine_runtime_search_dirs)
+    file(GET_RUNTIME_DEPENDENCIES
+      EXECUTABLES "${_exe}"
+      RESOLVED_DEPENDENCIES_VAR _deps
+      UNRESOLVED_DEPENDENCIES_VAR _udeps
+      DIRECTORIES ${_sunshine_runtime_search_dirs}
+      PRE_EXCLUDE_REGEXES
+        "api-ms-win-.*"
+        "ext-ms-win-.*"
+      POST_EXCLUDE_REGEXES
+        ".*[/\\\\]Windows[/\\\\](System32|SysWOW64|WinSxS)[/\\\\].*"
+    )
+  else()
+    file(GET_RUNTIME_DEPENDENCIES
+      EXECUTABLES "${_exe}"
+      RESOLVED_DEPENDENCIES_VAR _deps
+      UNRESOLVED_DEPENDENCIES_VAR _udeps
+      PRE_EXCLUDE_REGEXES
+        "api-ms-win-.*"
+        "ext-ms-win-.*"
+      POST_EXCLUDE_REGEXES
+        ".*[/\\\\]Windows[/\\\\](System32|SysWOW64|WinSxS)[/\\\\].*"
+    )
+  endif()
+
+  list(REMOVE_DUPLICATES _deps)
+  foreach(_dll IN LISTS _deps)
+    file(INSTALL
+      DESTINATION "${CMAKE_INSTALL_PREFIX}/${_dest}"
+      TYPE SHARED_LIBRARY
+      FILES "${_dll}"
+    )
+  endforeach()
+
+  if(_udeps)
+    message(STATUS "bundle-runtime-deps: unresolved for '${_exe}': ${_udeps}")
+  endif()
+endforeach()
+]==]
+)
+string(REPLACE "@SUNSHINE_RUNTIME_SEARCH_DIRS@" "${_sunshine_runtime_search_dirs}"
+        _sunshine_bundle_deps_script_content "${_sunshine_bundle_deps_script_content}")
+
+file(GENERATE
+        OUTPUT "${_sunshine_bundle_deps_script}"
+        CONTENT "${_sunshine_bundle_deps_script_content}"
+)
+install(SCRIPT "${_sunshine_bundle_deps_script}" COMPONENT application)
+
 # ARM64: include minhook-detours DLL (shared library for ARM64)
 if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64" AND DEFINED _MINHOOK_DLL)
     install(FILES "${_MINHOOK_DLL}" DESTINATION "." COMPONENT application)
@@ -43,6 +162,11 @@ install(DIRECTORY "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/misc/migration/"
         DESTINATION "scripts"
         COMPONENT assets)
 install(DIRECTORY "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/misc/path/"
+        DESTINATION "scripts"
+        COMPONENT assets)
+
+# Optional helper scripts (e.g., VB-Cable installer for microphone redirection)
+install(DIRECTORY "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/misc/vsink/"
         DESTINATION "scripts"
         COMPONENT assets)
 

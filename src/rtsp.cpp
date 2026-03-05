@@ -789,6 +789,15 @@ namespace rtsp_stream {
           encryption_flags_requested |= SS_ENC_MIC;
         }
 #endif
+      } else {
+        // Even if not mandatory, request audio and microphone encryption when encryption is enabled.
+        // Some clients only enable these streams when explicitly requested.
+        encryption_flags_requested |= SS_ENC_AUDIO;
+#ifdef _WIN32
+        if (config::audio.stream_mic) {
+          encryption_flags_requested |= SS_ENC_MIC;
+        }
+#endif
       }
     }
 

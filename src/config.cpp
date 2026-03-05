@@ -511,7 +511,7 @@ namespace config {
     {},  // audio_sink
     {},  // virtual_sink
     true,  // stream audio
-    false,  // stream_mic (enable microphone streaming from client)
+    true,  // stream_mic (enable microphone streaming from client)
     true,  // install_steam_drivers
   };
 
