@@ -84,9 +84,8 @@ using asio::ip::udp;
 
 using namespace std::literals;
 
-#ifndef MIC_PACKET_TYPE_OPUS
-  #define MIC_PACKET_TYPE_OPUS 96
-#endif
+constexpr std::uint8_t MIC_PACKET_TYPE_OPUS = 97;
+constexpr std::uint8_t MIC_PACKET_TYPE_OPUS_LEGACY = 96;
 
 namespace stream {
 
@@ -1400,12 +1399,13 @@ namespace stream {
       // 8-bit packet type variant (RTP payload type)
       auto *header = (mic_packet_t *) mic_recv_buffer.data();
       // RTP's payload type is stored in the low 7 bits; the high bit is the marker bit.
-      if ((header->rtp.packetType & 0x7F) == MIC_PACKET_TYPE_OPUS) {
+      auto payload_type = static_cast<std::uint8_t>(header->rtp.packetType & 0x7F);
+      if (payload_type == MIC_PACKET_TYPE_OPUS || payload_type == MIC_PACKET_TYPE_OPUS_LEGACY) {
         size_t header_size = sizeof(mic_packet_t);
         if (received_bytes > header_size) {
           std::uint16_t sequence_number = util::endian::little(header->rtp.sequenceNumber);
           if (!logged_first_mic_parsed_packet) {
-            BOOST_LOG(info) << "Parsed mic packet (rtp): seq="sv << sequence_number << ", payload="sv << (received_bytes - header_size) << " bytes";
+            BOOST_LOG(info) << "Parsed mic packet (rtp): pt="sv << static_cast<int>(payload_type) << ", seq="sv << sequence_number << ", payload="sv << (received_bytes - header_size) << " bytes";
             logged_first_mic_parsed_packet = true;
           }
           process_audio_data(reinterpret_cast<const std::uint8_t *>(mic_recv_buffer.data()) + header_size, received_bytes - header_size, sequence_number, client_ip);
@@ -1413,7 +1413,7 @@ namespace stream {
       } else if (!logged_mic_unknown_packet) {
         BOOST_LOG(warning)
           << "Ignoring mic UDP packet: unexpected RTP payload type "sv
-          << (header->rtp.packetType & 0x7F) << " (raw="sv << (int) header->rtp.packetType
+          << static_cast<int>(payload_type) << " (raw="sv << static_cast<int>(header->rtp.packetType)
           << ", len="sv << received_bytes << ')' ;
         logged_mic_unknown_packet = true;
       }

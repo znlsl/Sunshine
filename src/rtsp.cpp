@@ -826,9 +826,9 @@ namespace rtsp_stream {
     // Advertise microphone stream support (client -> host)
 #ifdef _WIN32
     if (config::audio.stream_mic) {
-      ss << "m=audio " << net::map_port(stream::MIC_STREAM_PORT) << " RTP/AVP 96" << std::endl;
-      ss << "a=rtpmap:96 opus/48000/2" << std::endl;
-      ss << "a=fmtp:96 minptime=10;useinbandfec=1" << std::endl;
+      ss << "m=audio " << net::map_port(stream::MIC_STREAM_PORT) << " RTP/AVP 97" << std::endl;
+      ss << "a=rtpmap:97 opus/48000/2" << std::endl;
+      ss << "a=fmtp:97 minptime=10;useinbandfec=1" << std::endl;
     }
 #endif
 
