@@ -1239,7 +1239,12 @@ namespace stream {
     bool mic_device_initialized = false;
     auto retry_delay = 300ms;
     bool logged_first_mic_packet = false;
+    bool logged_first_mic_parsed_packet = false;
     bool logged_first_mic_forward = false;
+    bool logged_mic_unknown_packet = false;
+    bool logged_mic_no_session_match = false;
+    bool logged_mic_decrypt_failed = false;
+    bool logged_mic_write_failed = false;
 
     auto process_audio_data = [&](const std::uint8_t *audio_data, size_t data_size, std::uint16_t sequence_number, const std::string &peer_addr) {
       // Only accept microphone packets from clients that negotiated microphone streaming.
@@ -1255,6 +1260,12 @@ namespace stream {
           if (ctx.mic_clients.size() == 1) {
             it = ctx.mic_clients.begin();
           } else {
+            if (!logged_mic_no_session_match) {
+              BOOST_LOG(warning)
+                << "Dropping client mic packet from unexpected address "sv << peer_addr
+                << " (active mic sessions: "sv << ctx.mic_clients.size() << ")"sv;
+              logged_mic_no_session_match = true;
+            }
             return;
           }
         }
@@ -1277,6 +1288,12 @@ namespace stream {
             // Some clients historically used an off-by-one sequence when building IVs.
             // Retry with (seq - 1) to be tolerant.
             if (!decrypt_with_seq(static_cast<std::uint16_t>(sequence_number - 1))) {
+              if (!logged_mic_decrypt_failed) {
+                BOOST_LOG(warning)
+                  << "Dropping client mic packet: decryption failed (len="sv << data_size
+                  << ", seq="sv << sequence_number << ", peer="sv << peer_addr << ')' ;
+                logged_mic_decrypt_failed = true;
+              }
               return;
             }
           }
@@ -1288,12 +1305,18 @@ namespace stream {
         if (rc > 0 && !logged_first_mic_forward) {
           BOOST_LOG(info) << "Received and forwarded first client microphone packet"sv;
           logged_first_mic_forward = true;
+        } else if (rc < 0 && !logged_mic_write_failed) {
+          BOOST_LOG(warning) << "Failed to forward client mic packet (rc="sv << rc << ", len="sv << data_size << ", seq="sv << sequence_number << ')' ;
+          logged_mic_write_failed = true;
         }
       } else {
         auto rc = audio::write_mic_data(plaintext.data(), plaintext.size(), sequence_number);
         if (rc > 0 && !logged_first_mic_forward) {
           BOOST_LOG(info) << "Received and forwarded first client microphone packet"sv;
           logged_first_mic_forward = true;
+        } else if (rc < 0 && !logged_mic_write_failed) {
+          BOOST_LOG(warning) << "Failed to forward client mic packet (rc="sv << rc << ", len="sv << plaintext.size() << ", seq="sv << sequence_number << ')' ;
+          logged_mic_write_failed = true;
         }
       }
     };
@@ -1346,6 +1369,12 @@ namespace stream {
 
       if (!logged_first_mic_packet) {
         BOOST_LOG(info) << "Received first client microphone UDP packet from "sv << normalize_peer_address(peer.address()) << " ("sv << received_bytes << " bytes)"sv;
+        {
+          std::lock_guard<std::mutex> lg(ctx.mic_clients_mutex);
+          if (!ctx.mic_clients.empty()) {
+            BOOST_LOG(info) << "Active mic sessions (by peer address): "sv << ctx.mic_clients.size();
+          }
+        }
         logged_first_mic_packet = true;
       }
 
@@ -1358,6 +1387,10 @@ namespace stream {
           size_t header_size = sizeof(rtp_packet_ext_t);
           if (received_bytes > header_size) {
             std::uint16_t sequence_number = util::endian::little(header_ext->sequenceNumber);
+            if (!logged_first_mic_parsed_packet) {
+              BOOST_LOG(info) << "Parsed mic packet (ext): seq="sv << sequence_number << ", payload="sv << (received_bytes - header_size) << " bytes";
+              logged_first_mic_parsed_packet = true;
+            }
             process_audio_data(reinterpret_cast<const std::uint8_t *>(mic_recv_buffer.data()) + header_size, received_bytes - header_size, sequence_number, client_ip);
           }
           continue;
@@ -1366,12 +1399,23 @@ namespace stream {
 
       // 8-bit packet type variant (RTP payload type)
       auto *header = (mic_packet_t *) mic_recv_buffer.data();
-      if (header->rtp.packetType == MIC_PACKET_TYPE_OPUS) {
+      // RTP's payload type is stored in the low 7 bits; the high bit is the marker bit.
+      if ((header->rtp.packetType & 0x7F) == MIC_PACKET_TYPE_OPUS) {
         size_t header_size = sizeof(mic_packet_t);
         if (received_bytes > header_size) {
           std::uint16_t sequence_number = util::endian::little(header->rtp.sequenceNumber);
+          if (!logged_first_mic_parsed_packet) {
+            BOOST_LOG(info) << "Parsed mic packet (rtp): seq="sv << sequence_number << ", payload="sv << (received_bytes - header_size) << " bytes";
+            logged_first_mic_parsed_packet = true;
+          }
           process_audio_data(reinterpret_cast<const std::uint8_t *>(mic_recv_buffer.data()) + header_size, received_bytes - header_size, sequence_number, client_ip);
         }
+      } else if (!logged_mic_unknown_packet) {
+        BOOST_LOG(warning)
+          << "Ignoring mic UDP packet: unexpected RTP payload type "sv
+          << (header->rtp.packetType & 0x7F) << " (raw="sv << (int) header->rtp.packetType
+          << ", len="sv << received_bytes << ')' ;
+        logged_mic_unknown_packet = true;
       }
     }
 
